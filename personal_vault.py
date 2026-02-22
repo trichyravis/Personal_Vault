@@ -285,11 +285,45 @@ def apply_css():
         box-shadow: 0 0 0 2px rgba(255,215,0,0.15) !important;
     }}
 
-    /* Password input — make it look secure */
+    /* ── All text inputs: label visibility ── */
+    [data-testid="stTextInput"] label,
+    [data-testid="stNumberInput"] label,
+    [data-testid="stTextArea"] label,
+    [data-testid="stSelectbox"] label,
+    [data-testid="stDateInput"] label {{
+        color: #e2e8f0 !important;
+        font-size: 0.88rem !important;
+        font-weight: 600 !important;
+        margin-bottom: 4px !important;
+    }}
+
+    /* ── Placeholder text — clearly visible but muted ── */
+    .stTextInput input::placeholder,
+    .stTextArea textarea::placeholder {{
+        color: #64748b !important;
+        opacity: 1 !important;
+    }}
+
+    /* ── Password input — bright white text, mono font ── */
     [data-testid="stTextInput"] input[type="password"] {{
         font-family: 'JetBrains Mono', monospace !important;
-        letter-spacing: 3px !important;
-        color: {C["gold"]} !important;
+        font-size: 1.1rem !important;
+        letter-spacing: 4px !important;
+        color: #ffffff !important;
+        background: #0f1e35 !important;
+        border: 1px solid #2d5a8e !important;
+        caret-color: {C["gold"]} !important;
+    }}
+    [data-testid="stTextInput"] input[type="password"]:focus {{
+        border-color: {C["gold"]} !important;
+        box-shadow: 0 0 0 2px rgba(255,215,0,0.2) !important;
+        background: #0f1e35 !important;
+    }}
+    [data-testid="stTextInput"] input[type="password"]::placeholder {{
+        color: #4a6080 !important;
+        letter-spacing: 0px !important;
+        font-family: 'Source Sans 3', sans-serif !important;
+        font-size: 0.88rem !important;
     }}
 
     /* Buttons */
@@ -361,7 +395,7 @@ def apply_css():
     ::-webkit-scrollbar-track {{ background: {C["bg"]}; }}
     ::-webkit-scrollbar-thumb {{ background: {C["border"]}; border-radius: 3px; }}
 
-    /* Alerts */
+    /* ── Alerts ── */
     .stSuccess {{ background: rgba(16,185,129,0.12) !important; border: 1px solid {C["green"]} !important; }}
     .stError   {{ background: rgba(244,63,94,0.12)  !important; border: 1px solid {C["rose"]}  !important; }}
     .stWarning {{ background: rgba(245,158,11,0.12) !important; border: 1px solid {C["amber"]} !important; }}
@@ -568,6 +602,18 @@ def render_record_card(rec: dict, cat: str, idx: int, color: str):
 # LOGIN / SETUP SCREEN
 # ══════════════════════════════════════════════════════════════════
 def show_auth_screen():
+    # Force all text in the auth area to be bright
+    st.markdown("""
+    <style>
+    div[data-testid="stVerticalBlock"] p,
+    div[data-testid="stVerticalBlock"] label,
+    div[data-testid="stVerticalBlock"] div[data-testid="stMarkdownContainer"] p {
+        color: #e2e8f0 !important;
+    }
+    .stTextInput > label { color: #e2e8f0 !important; font-weight: 600 !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.markdown(
         f"<div style='max-width:420px;margin:60px auto 0;'>"
         f"<div style='text-align:center;margin-bottom:32px;'>"
@@ -593,10 +639,22 @@ def show_auth_screen():
             f"</div></div>",
             unsafe_allow_html=True
         )
-        pw1 = st.text_input("🔑 Master Password", type="password", key="setup_pw1",
-                             placeholder="Minimum 8 characters")
-        pw2 = st.text_input("🔑 Confirm Password", type="password", key="setup_pw2",
-                             placeholder="Repeat password")
+        st.markdown(
+            f"<div style='color:#e2e8f0;font-size:0.9rem;font-weight:600;margin:12px 0 4px 0;'>"
+            f"🔑 Master Password</div>",
+            unsafe_allow_html=True
+        )
+        pw1 = st.text_input("Master Password", type="password", key="setup_pw1",
+                             placeholder="Minimum 8 characters — mix of letters, numbers, symbols",
+                             label_visibility="collapsed")
+        st.markdown(
+            f"<div style='color:#e2e8f0;font-size:0.9rem;font-weight:600;margin:12px 0 4px 0;'>"
+            f"🔑 Confirm Password</div>",
+            unsafe_allow_html=True
+        )
+        pw2 = st.text_input("Confirm Password", type="password", key="setup_pw2",
+                             placeholder="Repeat your password exactly",
+                             label_visibility="collapsed")
 
         # Strength indicator
         if pw1:
@@ -639,8 +697,14 @@ def show_auth_screen():
             f"</div>",
             unsafe_allow_html=True
         )
-        pw = st.text_input("🔑 Master Password", type="password", key="login_pw",
-                           placeholder="Enter your vault password")
+        st.markdown(
+            f"<div style='color:#e2e8f0;font-size:0.9rem;font-weight:600;margin:12px 0 4px 0;'>"
+            f"🔑 Master Password</div>",
+            unsafe_allow_html=True
+        )
+        pw = st.text_input("Master Password", type="password", key="login_pw",
+                           placeholder="Enter your vault password",
+                           label_visibility="collapsed")
 
         if st.button("🔓 Unlock Vault", use_container_width=True):
             if verify_master_password(pw):
@@ -836,9 +900,12 @@ def show_settings():
     _section_header("⚙️ Vault Settings")
 
     with st.expander("🔑 Change Master Password"):
-        old_pw  = st.text_input("Current Password", type="password", key="chg_old")
-        new_pw1 = st.text_input("New Password",     type="password", key="chg_new1")
-        new_pw2 = st.text_input("Confirm New",      type="password", key="chg_new2")
+        st.markdown("<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;margin:8px 0 4px 0;'>Current Password</div>", unsafe_allow_html=True)
+        old_pw  = st.text_input("Current Password", type="password", key="chg_old", label_visibility="collapsed")
+        st.markdown("<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;margin:8px 0 4px 0;'>New Password</div>", unsafe_allow_html=True)
+        new_pw1 = st.text_input("New Password",     type="password", key="chg_new1", label_visibility="collapsed")
+        st.markdown("<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;margin:8px 0 4px 0;'>Confirm New Password</div>", unsafe_allow_html=True)
+        new_pw2 = st.text_input("Confirm New",      type="password", key="chg_new2", label_visibility="collapsed")
         if st.button("Update Password"):
             if not verify_master_password(old_pw):
                 st.error("Current password is incorrect.")
