@@ -5,6 +5,8 @@
 # Requirements File
 # ============================================================
 
-streamlit>=1.32.0
+streamlit>=1.33.0
 cryptography>=42.0.0
 bcrypt>=4.1.0
+SpeechRecognition>=3.10.0
+pydub>=0.25.0
