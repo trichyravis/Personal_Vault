@@ -14,6 +14,7 @@ Security model:
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import json, os, base64, hashlib, hmac, time, re
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -485,36 +486,264 @@ def _hero():
 # ══════════════════════════════════════════════════════════════════
 # FORM RENDERER
 # ══════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════
+# VOICE INPUT COMPONENT  (Web Speech API — no API key needed)
+# ══════════════════════════════════════════════════════════════════
+def voice_text_input(label: str, key: str, default: str = "",
+                     height: int = 0, placeholder: str = "") -> str:
+    """
+    Text input (or textarea if height>0) with a 🎤 mic button.
+    Uses browser Web Speech API. Result stored in st.session_state[key].
+    Returns current value.
+    """
+    current = st.session_state.get(key, default)
+    is_area = height > 0
+    uid     = key.replace(" ", "_").replace("/", "_")
+
+    html = f"""
+    <div id="wrap_{uid}" style="margin-bottom:4px;">
+      <div style="display:flex;align-items:{'flex-start' if is_area else 'center'};gap:8px;">
+        {"<textarea" if is_area else "<input type='text'"}
+          id="inp_{uid}"
+          placeholder="{placeholder or label}"
+          style="flex:1;background:#0f1e35;color:#e2e8f0;border:1px solid #2d5a8e;
+                 border-radius:8px;padding:9px 12px;font-family:'Source Sans 3',sans-serif;
+                 font-size:0.9rem;outline:none;transition:border .2s;
+                 {'height:' + str(height) + 'px;resize:vertical;' if is_area else 'height:38px;'}
+                 box-sizing:border-box;width:100%;"
+          onfocus="this.style.borderColor='#FFD700';this.style.boxShadow='0 0 0 2px rgba(255,215,0,0.18)'"
+          onblur="this.style.borderColor='#2d5a8e';this.style.boxShadow='none'"
+          onchange="sendVal(this.value)"
+          oninput="sendVal(this.value)"
+        >{('</textarea>' if is_area else '')}
+
+        <!-- Mic button -->
+        <button id="mic_{uid}"
+          onclick="toggleMic_{uid}(event)"
+          title="Click to speak"
+          style="flex-shrink:0;width:38px;height:38px;border-radius:50%;
+                 border:2px solid #2d5a8e;background:#111827;cursor:pointer;
+                 font-size:1.1rem;display:flex;align-items:center;justify-content:center;
+                 transition:all .2s;margin-top:{'2px' if is_area else '0'};">
+          🎤
+        </button>
+      </div>
+
+      <!-- Status bar -->
+      <div id="status_{uid}"
+           style="font-size:0.72rem;color:#64748b;margin-top:3px;min-height:16px;
+                  padding-left:2px;"></div>
+    </div>
+
+    <script>
+    (function() {{
+      const inpEl    = document.getElementById('inp_{uid}');
+      const micBtn   = document.getElementById('mic_{uid}');
+      const statusEl = document.getElementById('status_{uid}');
+
+      // Set initial value
+      inpEl.value = {repr(str(current))};
+
+      let recognition = null;
+      let listening    = false;
+      let lang         = navigator.language || 'en-IN';
+
+      // Send value back to Streamlit
+      function sendVal(val) {{
+        window.parent.postMessage({{
+          type: 'streamlit:setComponentValue',
+          value: val
+        }}, '*');
+      }}
+
+      // Sync current input to Streamlit on load
+      sendVal(inpEl.value);
+
+      window.toggleMic_{uid} = function(e) {{
+        e.preventDefault();
+
+        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {{
+          statusEl.textContent = '⚠️ Speech API not supported. Use Chrome or Edge.';
+          statusEl.style.color = '#F43F5E';
+          return;
+        }}
+
+        if (listening) {{
+          recognition && recognition.stop();
+          return;
+        }}
+
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        recognition = new SR();
+        recognition.lang         = lang;
+        recognition.continuous   = true;
+        recognition.interimResults= true;
+        recognition.maxAlternatives = 1;
+
+        recognition.onstart = function() {{
+          listening = true;
+          micBtn.style.background     = '#F43F5E';
+          micBtn.style.borderColor    = '#F43F5E';
+          micBtn.style.boxShadow      = '0 0 0 4px rgba(244,63,94,0.3)';
+          micBtn.textContent          = '⏹';
+          micBtn.title                = 'Click to stop';
+          statusEl.textContent        = '🔴 Listening… speak now';
+          statusEl.style.color        = '#F43F5E';
+        }};
+
+        recognition.onresult = function(event) {{
+          let interim = ''; let final_t = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {{
+            const t = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {{ final_t += t + ' '; }}
+            else {{ interim += t; }}
+          }}
+          if (final_t) {{
+            const existing = inpEl.value;
+            const sep      = existing && !existing.endsWith(' ') ? ' ' : '';
+            inpEl.value    = existing + sep + final_t.trim();
+            sendVal(inpEl.value);
+          }}
+          statusEl.textContent = interim
+            ? '💬 ' + interim.substring(0, 60) + (interim.length>60?'…':'')
+            : '🔴 Listening…';
+        }};
+
+        recognition.onerror = function(event) {{
+          let msg = event.error;
+          if (msg === 'not-allowed')  msg = 'Microphone permission denied — allow mic in browser';
+          if (msg === 'no-speech')    msg = 'No speech detected — try again';
+          if (msg === 'network')      msg = 'Network error — check connection';
+          statusEl.textContent = '⚠️ ' + msg;
+          statusEl.style.color = '#F59E0B';
+          resetMic();
+        }};
+
+        recognition.onend = function() {{
+          resetMic();
+          if (inpEl.value) {{
+            statusEl.textContent = '✅ Done — ' + inpEl.value.length + ' chars captured';
+            statusEl.style.color = '#10B981';
+          }}
+        }};
+
+        recognition.start();
+      }};
+
+      function resetMic() {{
+        listening                = false;
+        micBtn.style.background  = '#111827';
+        micBtn.style.borderColor = '#2d5a8e';
+        micBtn.style.boxShadow   = 'none';
+        micBtn.textContent       = '🎤';
+        micBtn.title             = 'Click to speak';
+      }}
+    }})();
+    </script>
+    """
+
+    # Render component — height accounts for textarea + mic + status bar
+    comp_height = (height + 60) if is_area else 70
+    result = components.html(html, height=comp_height, scrolling=False)
+
+    # If component returned a new value, store it in session state
+    if result is not None and result != current:
+        st.session_state[key] = result
+        return result
+
+    return current
+
+
+def voice_label(label: str, color: str = "#e2e8f0"):
+    """Render a styled field label above a voice input."""
+    st.markdown(
+        f"<div style='color:{color};font-size:0.88rem;font-weight:600;"
+        f"margin:10px 0 2px 0;'>{label}</div>",
+        unsafe_allow_html=True
+    )
+
+
+
 def render_form(category: str, existing: dict = None) -> dict:
-    """Render dynamic form for a category. Returns filled dict or None."""
+    """
+    Render dynamic form for a category.
+    • text / textarea  → voice_text_input (mic button + Web Speech API)
+    • number           → st.number_input  (typing only — numbers don't suit speech)
+    • date             → st.date_input    (calendar picker)
+    • select           → st.selectbox     (fixed options)
+    Returns filled dict.
+    """
     template = FIELD_TEMPLATES.get(category, [])
-    data = {}
+    data     = {}
 
     for field, ftype in template:
-        key = f"form_{category}_{field}"
+        key     = f"form_{category}_{field}"
         default = existing.get(field, "") if existing else ""
 
         if ftype == "text":
-            data[field] = st.text_input(field, value=default, key=key)
+            voice_label(field)
+            # Pre-seed session_state so voice component picks it up
+            if key not in st.session_state:
+                st.session_state[key] = default
+            val = voice_text_input(
+                label=field, key=key,
+                default=st.session_state.get(key, default),
+                placeholder=f"Type or 🎤 speak {field.lower()}"
+            )
+            data[field] = val
+
+        elif ftype == "textarea":
+            voice_label(field)
+            if key not in st.session_state:
+                st.session_state[key] = default
+            val = voice_text_input(
+                label=field, key=key,
+                default=st.session_state.get(key, default),
+                height=90,
+                placeholder=f"Type or 🎤 speak {field.lower()}"
+            )
+            data[field] = val
+
         elif ftype == "number":
             try:
                 dv = float(default) if default else 0.0
             except:
                 dv = 0.0
-            data[field] = st.number_input(field, value=dv, key=key, step=0.01)
-        elif ftype == "textarea":
-            data[field] = st.text_area(field, value=default, key=key, height=80)
+            st.markdown(
+                f"<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;"
+                f"margin:10px 0 2px 0;'>{field}</div>",
+                unsafe_allow_html=True
+            )
+            data[field] = st.number_input(
+                field, value=dv, key=key, step=0.01,
+                label_visibility="collapsed"
+            )
+
         elif ftype == "date":
             try:
                 dv = datetime.strptime(default, "%Y-%m-%d").date() if default else date.today()
             except:
                 dv = date.today()
-            picked = st.date_input(field, value=dv, key=key)
+            st.markdown(
+                f"<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;"
+                f"margin:10px 0 2px 0;'>📅 {field}</div>",
+                unsafe_allow_html=True
+            )
+            picked = st.date_input(field, value=dv, key=key, label_visibility="collapsed")
             data[field] = picked.strftime("%Y-%m-%d") if picked else ""
+
         elif ftype.startswith("select:"):
             options = [""] + ftype.split(":", 1)[1].split(",")
             idx = options.index(default) if default in options else 0
-            data[field] = st.selectbox(field, options, index=idx, key=key)
+            st.markdown(
+                f"<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;"
+                f"margin:10px 0 2px 0;'>{field}</div>",
+                unsafe_allow_html=True
+            )
+            data[field] = st.selectbox(
+                field, options, index=idx, key=key,
+                label_visibility="collapsed"
+            )
 
     return data
 
@@ -843,6 +1072,24 @@ def show_category(cat: str):
     records = vault.get(cat, [])
 
     _section_header(cat, f"{len(records)} record{'s' if len(records)!=1 else ''} stored")
+
+    # ── Voice input hint ─────────────────────────────────────────
+    _g = C["gold"]; _mb = C["border"]; _mt = C["muted"]
+    st.markdown(
+        f"<div style='background:#0f1e35;border:1px solid {_mb};"
+        f"border-left:3px solid {_g};border-radius:8px;"
+        f"padding:8px 14px;margin-bottom:12px;font-size:0.8rem;"
+        f"display:flex;align-items:center;gap:10px;'>"
+        f"<span style='font-size:1.2rem;'>🎤</span>"
+        f"<span style='color:{_mt};'>"
+        f"<b style='color:{_g};'> Voice Input enabled</b> — "
+        f"click the <b style='color:#e2e8f0;'>🎤 mic button</b> next to any text field, "
+        f"speak clearly, then click <b style='color:#e2e8f0;'>⏹ stop</b> when done. "
+        f"<span style='color:#4a6080;'>Works on Chrome, Edge, Safari 14+. "
+        f"Browser will request microphone permission on first use.</span>"
+        f"</span></div>",
+        unsafe_allow_html=True
+    )
 
     # ── Existing records ─────────────────────────────────────────
     if records:
