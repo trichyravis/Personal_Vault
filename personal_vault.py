@@ -15,7 +15,9 @@ Security model:
 
 import streamlit as st
 import streamlit.components.v1 as components
-import json, os, base64, hashlib, hmac, time, re
+import json
+import io
+import speech_recognition as sr, os, base64, hashlib, hmac, time, re
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -487,190 +489,139 @@ def _hero():
 # FORM RENDERER
 # ══════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════
-# VOICE INPUT COMPONENT  (Web Speech API — no API key needed)
+# VOICE INPUT  —  st.audio_input → SpeechRecognition (Google free)
 # ══════════════════════════════════════════════════════════════════
-def voice_text_input(label: str, key: str, default: str = "",
-                     height: int = 0, placeholder: str = "") -> str:
+
+def _transcribe_audio(audio_bytes: bytes) -> tuple[str, str]:
+    """Transcribe WAV bytes using Google Speech Recognition (free, no key).
+    Returns (transcript, error_message)."""
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(io.BytesIO(audio_bytes)) as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.3)
+            audio_data = recognizer.record(source)
+        text = recognizer.recognize_google(audio_data, language="en-IN")
+        return text, ""
+    except sr.UnknownValueError:
+        return "", "Could not understand — speak clearly and try again."
+    except sr.RequestError as e:
+        return "", f"Speech service unavailable: {e}"
+    except Exception as e:
+        return "", f"Error: {e}"
+
+
+def voice_field(label: str, key: str, default: str = "",
+                multiline: bool = False) -> str:
     """
-    Text input (or textarea if height>0) with a 🎤 mic button.
-    Uses browser Web Speech API. Result stored in st.session_state[key].
-    Returns current value.
+    Text input (or textarea) + 🎤 Speak button.
+    Records via st.audio_input → transcribes via Google Speech API.
+    User chooses to Replace or Append transcript into the field.
     """
-    current = st.session_state.get(key, default)
-    is_area = height > 0
-    uid     = key.replace(" ", "_").replace("/", "_")
+    C_GOLD   = "#FFD700";  C_BORDER = "#1e3a5f"
+    C_TEXT   = "#e2e8f0";  C_MUTED  = "#64748b"
 
-    html = f"""
-    <div id="wrap_{uid}" style="margin-bottom:4px;">
-      <div style="display:flex;align-items:{'flex-start' if is_area else 'center'};gap:8px;">
-        {"<textarea" if is_area else "<input type='text'"}
-          id="inp_{uid}"
-          placeholder="{placeholder or label}"
-          style="flex:1;background:#0f1e35;color:#e2e8f0;border:1px solid #2d5a8e;
-                 border-radius:8px;padding:9px 12px;font-family:'Source Sans 3',sans-serif;
-                 font-size:0.9rem;outline:none;transition:border .2s;
-                 {'height:' + str(height) + 'px;resize:vertical;' if is_area else 'height:38px;'}
-                 box-sizing:border-box;width:100%;"
-          onfocus="this.style.borderColor='#FFD700';this.style.boxShadow='0 0 0 2px rgba(255,215,0,0.18)'"
-          onblur="this.style.borderColor='#2d5a8e';this.style.boxShadow='none'"
-          onchange="sendVal(this.value)"
-          oninput="sendVal(this.value)"
-        >{('</textarea>' if is_area else '')}
-
-        <!-- Mic button -->
-        <button id="mic_{uid}"
-          onclick="toggleMic_{uid}(event)"
-          title="Click to speak"
-          style="flex-shrink:0;width:38px;height:38px;border-radius:50%;
-                 border:2px solid #2d5a8e;background:#111827;cursor:pointer;
-                 font-size:1.1rem;display:flex;align-items:center;justify-content:center;
-                 transition:all .2s;margin-top:{'2px' if is_area else '0'};">
-          🎤
-        </button>
-      </div>
-
-      <!-- Status bar -->
-      <div id="status_{uid}"
-           style="font-size:0.72rem;color:#64748b;margin-top:3px;min-height:16px;
-                  padding-left:2px;"></div>
-    </div>
-
-    <script>
-    (function() {{
-      const inpEl    = document.getElementById('inp_{uid}');
-      const micBtn   = document.getElementById('mic_{uid}');
-      const statusEl = document.getElementById('status_{uid}');
-
-      // Set initial value
-      inpEl.value = {repr(str(current))};
-
-      let recognition = null;
-      let listening    = false;
-      let lang         = navigator.language || 'en-IN';
-
-      // Send value back to Streamlit
-      function sendVal(val) {{
-        window.parent.postMessage({{
-          type: 'streamlit:setComponentValue',
-          value: val
-        }}, '*');
-      }}
-
-      // Sync current input to Streamlit on load
-      sendVal(inpEl.value);
-
-      window.toggleMic_{uid} = function(e) {{
-        e.preventDefault();
-
-        if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {{
-          statusEl.textContent = '⚠️ Speech API not supported. Use Chrome or Edge.';
-          statusEl.style.color = '#F43F5E';
-          return;
-        }}
-
-        if (listening) {{
-          recognition && recognition.stop();
-          return;
-        }}
-
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        recognition = new SR();
-        recognition.lang         = lang;
-        recognition.continuous   = true;
-        recognition.interimResults= true;
-        recognition.maxAlternatives = 1;
-
-        recognition.onstart = function() {{
-          listening = true;
-          micBtn.style.background     = '#F43F5E';
-          micBtn.style.borderColor    = '#F43F5E';
-          micBtn.style.boxShadow      = '0 0 0 4px rgba(244,63,94,0.3)';
-          micBtn.textContent          = '⏹';
-          micBtn.title                = 'Click to stop';
-          statusEl.textContent        = '🔴 Listening… speak now';
-          statusEl.style.color        = '#F43F5E';
-        }};
-
-        recognition.onresult = function(event) {{
-          let interim = ''; let final_t = '';
-          for (let i = event.resultIndex; i < event.results.length; i++) {{
-            const t = event.results[i][0].transcript;
-            if (event.results[i].isFinal) {{ final_t += t + ' '; }}
-            else {{ interim += t; }}
-          }}
-          if (final_t) {{
-            const existing = inpEl.value;
-            const sep      = existing && !existing.endsWith(' ') ? ' ' : '';
-            inpEl.value    = existing + sep + final_t.trim();
-            sendVal(inpEl.value);
-          }}
-          statusEl.textContent = interim
-            ? '💬 ' + interim.substring(0, 60) + (interim.length>60?'…':'')
-            : '🔴 Listening…';
-        }};
-
-        recognition.onerror = function(event) {{
-          let msg = event.error;
-          if (msg === 'not-allowed')  msg = 'Microphone permission denied — allow mic in browser';
-          if (msg === 'no-speech')    msg = 'No speech detected — try again';
-          if (msg === 'network')      msg = 'Network error — check connection';
-          statusEl.textContent = '⚠️ ' + msg;
-          statusEl.style.color = '#F59E0B';
-          resetMic();
-        }};
-
-        recognition.onend = function() {{
-          resetMic();
-          if (inpEl.value) {{
-            statusEl.textContent = '✅ Done — ' + inpEl.value.length + ' chars captured';
-            statusEl.style.color = '#10B981';
-          }}
-        }};
-
-        recognition.start();
-      }};
-
-      function resetMic() {{
-        listening                = false;
-        micBtn.style.background  = '#111827';
-        micBtn.style.borderColor = '#2d5a8e';
-        micBtn.style.boxShadow   = 'none';
-        micBtn.textContent       = '🎤';
-        micBtn.title             = 'Click to speak';
-      }}
-    }})();
-    </script>
-    """
-
-    # Render component — height accounts for textarea + mic + status bar
-    comp_height = (height + 60) if is_area else 70
-    result = components.html(html, height=comp_height, scrolling=False)
-
-    # If component returned a new value, store it in session state
-    if result is not None and result != current:
-        st.session_state[key] = result
-        return result
-
-    return current
-
-
-def voice_label(label: str, color: str = "#e2e8f0"):
-    """Render a styled field label above a voice input."""
+    # Label
     st.markdown(
-        f"<div style='color:{color};font-size:0.88rem;font-weight:600;"
-        f"margin:10px 0 2px 0;'>{label}</div>",
+        f"<div style='color:{C_TEXT};font-size:0.88rem;font-weight:600;"
+        f"margin:10px 0 4px 0;'>{label}</div>",
         unsafe_allow_html=True
     )
 
+    # Seed session state
+    if key not in st.session_state:
+        st.session_state[key] = default
 
+    # Text field (always visible, always editable)
+    if multiline:
+        typed = st.text_area(label, value=st.session_state[key],
+                             key=f"_ta_{key}", height=80,
+                             label_visibility="collapsed")
+    else:
+        typed = st.text_input(label, value=st.session_state[key],
+                              key=f"_ti_{key}",
+                              label_visibility="collapsed")
+    st.session_state[key] = typed
+
+    # Mic toggle button
+    mic_open_key = f"_mic_{key}"
+    col_btn, col_hint = st.columns([1, 4])
+    with col_btn:
+        btn_label = "⏹ Close mic" if st.session_state.get(mic_open_key) else "🎤 Speak"
+        if st.button(btn_label, key=f"_micbtn_{key}"):
+            st.session_state[mic_open_key] = not st.session_state.get(mic_open_key, False)
+            st.rerun()
+    with col_hint:
+        if not st.session_state.get(mic_open_key):
+            st.markdown(
+                f"<div style='color:{C_MUTED};font-size:0.76rem;padding-top:8px;'>"
+                f"Click 🎤 Speak to record voice</div>",
+                unsafe_allow_html=True
+            )
+
+    # Audio recorder panel
+    if st.session_state.get(mic_open_key, False):
+        st.markdown(
+            f"<div style='background:#0f1e35;border:1px solid {C_BORDER};"
+            f"border-left:3px solid {C_GOLD};border-radius:8px;"
+            f"padding:10px 14px;margin:4px 0 8px 0;font-size:0.82rem;'>"
+            f"<b style='color:{C_GOLD};'>How to use:</b>"
+            f"<span style='color:{C_TEXT};'> Press the red mic ● below → speak → "
+            f"press Stop ■ → click ✅ Replace or ➕ Append.</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+        audio_val = st.audio_input("🎙️ Record voice", key=f"_aud_{key}")
+
+        if audio_val is not None:
+            with st.spinner("Transcribing…"):
+                transcript, error = _transcribe_audio(audio_val.read())
+
+            if error:
+                st.error(f"⚠️ {error}")
+            else:
+                # Preview box
+                st.markdown(
+                    f"<div style='background:#0a2010;border:1px solid #10B981;"
+                    f"border-radius:8px;padding:10px 14px;margin:4px 0;'>"
+                    f"<div style='color:#10B981;font-size:0.76rem;font-weight:700;"
+                    f"margin-bottom:4px;'>📝 Transcript</div>"
+                    f"<div style='color:{C_TEXT};font-size:0.92rem;"
+                    f"<div style='color:{C_TEXT};font-size:0.92rem;font-style:italic;'>&ldquo;{transcript}&rdquo;</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                c1, c2, c3 = st.columns([1, 1, 1])
+                safe = transcript[:8].replace(" ", "_")
+                with c1:
+                    if st.button("✅ Replace", key=f"_rep_{key}_{safe}",
+                                 help="Replace field content with transcript"):
+                        st.session_state[key]           = transcript
+                        st.session_state[mic_open_key]  = False
+                        st.rerun()
+                with c2:
+                    if st.button("➕ Append", key=f"_app_{key}_{safe}",
+                                 help="Add transcript to end of existing text"):
+                        existing = st.session_state.get(key, "")
+                        sep      = " " if existing and not existing.endswith(" ") else ""
+                        st.session_state[key]           = existing + sep + transcript
+                        st.session_state[mic_open_key]  = False
+                        st.rerun()
+                with c3:
+                    if st.button("❌ Discard", key=f"_dis_{key}_{safe}"):
+                        st.session_state[mic_open_key] = False
+                        st.rerun()
+
+    return st.session_state.get(key, typed)
 
 def render_form(category: str, existing: dict = None) -> dict:
     """
     Render dynamic form for a category.
-    • text / textarea  → voice_text_input (mic button + Web Speech API)
-    • number           → st.number_input  (typing only — numbers don't suit speech)
-    • date             → st.date_input    (calendar picker)
-    • select           → st.selectbox     (fixed options)
+    • text / textarea → voice_field (type OR 🎤 record voice → transcribe)
+    • number          → st.number_input  (typing — numbers don't suit speech)
+    • date            → st.date_input    (calendar picker)
+    • select          → st.selectbox     (fixed options)
     Returns filled dict.
     """
     template = FIELD_TEMPLATES.get(category, [])
@@ -681,27 +632,13 @@ def render_form(category: str, existing: dict = None) -> dict:
         default = existing.get(field, "") if existing else ""
 
         if ftype == "text":
-            voice_label(field)
-            # Pre-seed session_state so voice component picks it up
-            if key not in st.session_state:
-                st.session_state[key] = default
-            val = voice_text_input(
-                label=field, key=key,
-                default=st.session_state.get(key, default),
-                placeholder=f"Type or 🎤 speak {field.lower()}"
-            )
+            val = voice_field(label=field, key=key,
+                              default=default, multiline=False)
             data[field] = val
 
         elif ftype == "textarea":
-            voice_label(field)
-            if key not in st.session_state:
-                st.session_state[key] = default
-            val = voice_text_input(
-                label=field, key=key,
-                default=st.session_state.get(key, default),
-                height=90,
-                placeholder=f"Type or 🎤 speak {field.lower()}"
-            )
+            val = voice_field(label=field, key=key,
+                              default=default, multiline=True)
             data[field] = val
 
         elif ftype == "number":
@@ -711,7 +648,7 @@ def render_form(category: str, existing: dict = None) -> dict:
                 dv = 0.0
             st.markdown(
                 f"<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;"
-                f"margin:10px 0 2px 0;'>{field}</div>",
+                f"margin:10px 0 4px 0;'>{field}</div>",
                 unsafe_allow_html=True
             )
             data[field] = st.number_input(
@@ -726,7 +663,7 @@ def render_form(category: str, existing: dict = None) -> dict:
                 dv = date.today()
             st.markdown(
                 f"<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;"
-                f"margin:10px 0 2px 0;'>📅 {field}</div>",
+                f"margin:10px 0 4px 0;'>📅 {field}</div>",
                 unsafe_allow_html=True
             )
             picked = st.date_input(field, value=dv, key=key, label_visibility="collapsed")
@@ -737,7 +674,7 @@ def render_form(category: str, existing: dict = None) -> dict:
             idx = options.index(default) if default in options else 0
             st.markdown(
                 f"<div style='color:#e2e8f0;font-size:0.88rem;font-weight:600;"
-                f"margin:10px 0 2px 0;'>{field}</div>",
+                f"margin:10px 0 4px 0;'>{field}</div>",
                 unsafe_allow_html=True
             )
             data[field] = st.selectbox(
