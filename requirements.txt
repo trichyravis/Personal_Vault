@@ -1,1 +1,10 @@
 
+# ============================================================
+# THE MOUNTAIN PATH — Personal Vault
+# Prof. V. Ravichandran
+# Requirements File
+# ============================================================
+
+streamlit>=1.32.0
+cryptography>=42.0.0
+bcrypt>=4.1.0
