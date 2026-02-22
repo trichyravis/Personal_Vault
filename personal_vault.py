@@ -510,6 +510,16 @@ def _transcribe_audio(audio_bytes: bytes) -> tuple[str, str]:
         return "", f"Error: {e}"
 
 
+def _safe_str(val) -> str:
+    """Ensure only plain strings go into session_state — never widget objects."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    # DeltaGenerator or any other widget object → discard, return empty
+    return ""
+
+
 def voice_field(label: str, key: str, default: str = "",
                 multiline: bool = False) -> str:
     """
@@ -520,52 +530,55 @@ def voice_field(label: str, key: str, default: str = "",
     C_GOLD   = "#FFD700";  C_BORDER = "#1e3a5f"
     C_TEXT   = "#e2e8f0";  C_MUTED  = "#64748b"
 
-    # Label
+    # Always sanitize before touching session_state
+    safe_default = _safe_str(default)
+
+    # Seed session_state with a clean string (only if not already set)
+    if key not in st.session_state or not isinstance(st.session_state[key], str):
+        st.session_state[key] = safe_default
+
+    current_val = st.session_state[key]
+
+    # ── Label ────────────────────────────────────────────────
     st.markdown(
         f"<div style='color:{C_TEXT};font-size:0.88rem;font-weight:600;"
         f"margin:10px 0 4px 0;'>{label}</div>",
         unsafe_allow_html=True
     )
 
-    # Seed session state
-    if key not in st.session_state:
-        st.session_state[key] = default
-
-    # Text field (always visible, always editable)
+    # ── Text field (always visible, always editable) ─────────
+    widget_key = f"_ta_{key}" if multiline else f"_ti_{key}"
     if multiline:
-        typed = st.text_area(label, value=st.session_state[key],
-                             key=f"_ta_{key}", height=80,
+        typed = st.text_area(label, value=current_val,
+                             key=widget_key, height=80,
                              label_visibility="collapsed")
     else:
-        typed = st.text_input(label, value=st.session_state[key],
-                              key=f"_ti_{key}",
+        typed = st.text_input(label, value=current_val,
+                              key=widget_key,
                               label_visibility="collapsed")
+
+    # Sanitize widget return before storing
+    typed = _safe_str(typed)
     st.session_state[key] = typed
 
-    # Mic toggle button
+    # ── Mic toggle button ────────────────────────────────────
     mic_open_key = f"_mic_{key}"
-    col_btn, col_hint = st.columns([1, 4])
-    with col_btn:
-        btn_label = "⏹ Close mic" if st.session_state.get(mic_open_key) else "🎤 Speak"
-        if st.button(btn_label, key=f"_micbtn_{key}"):
-            st.session_state[mic_open_key] = not st.session_state.get(mic_open_key, False)
-            st.rerun()
-    with col_hint:
-        if not st.session_state.get(mic_open_key):
-            st.markdown(
-                f"<div style='color:{C_MUTED};font-size:0.76rem;padding-top:8px;'>"
-                f"Click 🎤 Speak to record voice</div>",
-                unsafe_allow_html=True
-            )
 
-    # Audio recorder panel
+    # Render mic button and hint side by side WITHOUT st.columns
+    # (columns were causing DeltaGenerator to bleed into session state)
+    btn_label = "⏹ Close mic" if st.session_state.get(mic_open_key) else "🎤 Speak"
+    if st.button(btn_label, key=f"_micbtn_{key}"):
+        st.session_state[mic_open_key] = not st.session_state.get(mic_open_key, False)
+        st.rerun()
+
+    # ── Audio recorder panel ─────────────────────────────────
     if st.session_state.get(mic_open_key, False):
         st.markdown(
             f"<div style='background:#0f1e35;border:1px solid {C_BORDER};"
             f"border-left:3px solid {C_GOLD};border-radius:8px;"
             f"padding:10px 14px;margin:4px 0 8px 0;font-size:0.82rem;'>"
             f"<b style='color:{C_GOLD};'>How to use:</b>"
-            f"<span style='color:{C_TEXT};'> Press the red mic ● below → speak → "
+            f"<span style='color:{C_TEXT};'> Press ● below → speak → "
             f"press Stop ■ → click ✅ Replace or ➕ Append.</span>"
             f"</div>",
             unsafe_allow_html=True
@@ -580,40 +593,40 @@ def voice_field(label: str, key: str, default: str = "",
             if error:
                 st.error(f"⚠️ {error}")
             else:
-                # Preview box
+                # Transcript preview
                 st.markdown(
                     f"<div style='background:#0a2010;border:1px solid #10B981;"
-                    f"border-radius:8px;padding:10px 14px;margin:4px 0;'>"
+                    f"border-radius:8px;padding:10px 14px;margin:6px 0;'>"
                     f"<div style='color:#10B981;font-size:0.76rem;font-weight:700;"
                     f"margin-bottom:4px;'>📝 Transcript</div>"
                     f"<div style='color:{C_TEXT};font-size:0.92rem;"
-                    f"<div style='color:{C_TEXT};font-size:0.92rem;font-style:italic;'>&ldquo;{transcript}&rdquo;</div>"
+                    f"font-style:italic;'>&ldquo;{transcript}&rdquo;</div>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
 
-                c1, c2, c3 = st.columns([1, 1, 1])
-                safe = transcript[:8].replace(" ", "_")
-                with c1:
-                    if st.button("✅ Replace", key=f"_rep_{key}_{safe}",
-                                 help="Replace field content with transcript"):
-                        st.session_state[key]           = transcript
-                        st.session_state[mic_open_key]  = False
-                        st.rerun()
-                with c2:
-                    if st.button("➕ Append", key=f"_app_{key}_{safe}",
-                                 help="Add transcript to end of existing text"):
-                        existing = st.session_state.get(key, "")
-                        sep      = " " if existing and not existing.endswith(" ") else ""
-                        st.session_state[key]           = existing + sep + transcript
-                        st.session_state[mic_open_key]  = False
-                        st.rerun()
-                with c3:
-                    if st.button("❌ Discard", key=f"_dis_{key}_{safe}"):
-                        st.session_state[mic_open_key] = False
-                        st.rerun()
+                # Action buttons — stacked vertically, no columns
+                safe_id = abs(hash(transcript)) % 100000
+                if st.button("✅ Replace field with transcript",
+                             key=f"_rep_{key}_{safe_id}"):
+                    st.session_state[key]          = _safe_str(transcript)
+                    st.session_state[mic_open_key] = False
+                    st.rerun()
 
-    return st.session_state.get(key, typed)
+                if st.button("➕ Append transcript to field",
+                             key=f"_app_{key}_{safe_id}"):
+                    existing = _safe_str(st.session_state.get(key, ""))
+                    sep      = " " if existing and not existing.endswith(" ") else ""
+                    st.session_state[key]          = existing + sep + _safe_str(transcript)
+                    st.session_state[mic_open_key] = False
+                    st.rerun()
+
+                if st.button("❌ Discard transcript",
+                             key=f"_dis_{key}_{safe_id}"):
+                    st.session_state[mic_open_key] = False
+                    st.rerun()
+
+    return _safe_str(st.session_state.get(key, typed))
 
 def render_form(category: str, existing: dict = None) -> dict:
     """
