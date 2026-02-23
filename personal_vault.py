@@ -628,20 +628,22 @@ def voice_field(label: str, key: str, default: str = "",
 
     return _safe_str(st.session_state.get(key, typed))
 
-def render_form(category: str, existing: dict = None) -> dict:
+def render_form(category: str, existing: dict = None,
+                form_id: str = "new") -> dict:
     """
     Render dynamic form for a category.
-    • text / textarea → voice_field (type OR 🎤 record voice → transcribe)
-    • number          → st.number_input  (typing — numbers don't suit speech)
-    • date            → st.date_input    (calendar picker)
-    • select          → st.selectbox     (fixed options)
-    Returns filled dict.
+    form_id  — unique suffix to prevent duplicate widget keys when both
+               an edit form and the add-new form are on screen together.
+               Pass form_id="add" for the add-new form and
+               form_id=f"edit_{i}" for edit-record forms.
     """
     template = FIELD_TEMPLATES.get(category, [])
     data     = {}
+    # Sanitise category for use in widget keys
+    cat_key  = category.replace(" ", "_").replace("/","_").replace("—","")
 
     for field, ftype in template:
-        key     = f"form_{category}_{field}"
+        key     = f"form_{cat_key}_{form_id}_{field}"
         default = existing.get(field, "") if existing else ""
 
         if ftype == "text":
@@ -1046,7 +1048,7 @@ def show_category(cat: str):
         for i, rec in enumerate(records):
             if st.session_state.get(f"editing_{cat}_{i}"):
                 st.markdown(f"**✏️ Editing Entry #{i+1}**")
-                edited = render_form(cat, existing=rec)
+                edited = render_form(cat, existing=rec, form_id=f"edit_{i}")
                 c1, c2, _ = st.columns([1, 1, 3])
                 with c1:
                     if st.button("💾 Save", key=f"save_{cat}_{i}"):
@@ -1077,7 +1079,7 @@ def show_category(cat: str):
     # ── Add new ──────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander(f"➕ Add New {cat.split(' ',1)[1] if ' ' in cat else cat} Entry", expanded=not records):
-        new_data = render_form(cat)
+        new_data = render_form(cat, form_id="add")
         if st.button(f"💾 Save Entry", key=f"add_{cat}"):
             new_data["_added"]   = str(date.today())
             new_data["_updated"] = str(date.today())
