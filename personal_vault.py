@@ -523,59 +523,67 @@ def _safe_str(val) -> str:
 def voice_field(label: str, key: str, default: str = "",
                 multiline: bool = False) -> str:
     """
-    Text input (or textarea) + 🎤 Speak button.
-    Records via st.audio_input → transcribes via Google Speech API.
-    User chooses to Replace or Append transcript into the field.
+    Text input + 🎤 voice button using a 3-key pattern that satisfies
+    Streamlit's strict session_state rules:
 
-    KEY DESIGN: Streamlit widgets own their value via their widget_key in
-    session_state. When we update the value from voice, we MUST write to
-    the widget_key (e.g. _ti_xxx), NOT just the outer key. Otherwise the
-    widget renders stale on rerun because it reads its own key, not ours.
+      val_key    — stores the actual text value (plain string, never a widget)
+      widget_key — the live widget key; deleted before rerun so Streamlit
+                   re-creates the widget fresh with the new value from val_key
+      mic_key    — bool flag: is the mic panel open?
+
+    Streamlit rule: you CANNOT write to a widget key while the widget
+    is rendered. Solution: delete the widget key, write the new value to
+    val_key, then rerun — the widget re-renders reading val_key as its
+    initial value.
     """
-    C_GOLD   = "#FFD700";  C_BORDER = "#1e3a5f"
-    C_TEXT   = "#e2e8f0";  C_MUTED  = "#64748b"
+    C_GOLD = "#FFD700"; C_BORDER = "#1e3a5f"
+    C_TEXT = "#e2e8f0"; C_MUTED  = "#64748b"
 
-    widget_key = f"_ta_{key}" if multiline else f"_ti_{key}"
-    mic_open_key = f"_mic_{key}"
+    val_key    = f"_val_{key}"
+    widget_key = f"_wgt_{key}"
+    mic_key    = f"_mic_{key}"
 
-    # Seed widget_key with safe string default (first render only)
+    # Initialise value store on first render
     safe_default = _safe_str(default)
-    if widget_key not in st.session_state or not isinstance(st.session_state[widget_key], str):
-        st.session_state[widget_key] = safe_default
+    if val_key not in st.session_state:
+        st.session_state[val_key] = safe_default
 
-    # ── Label ─────────────────────────────────────────────────
+    # ── Label ──────────────────────────────────────────────────
     st.markdown(
         f"<div style='color:{C_TEXT};font-size:0.88rem;font-weight:600;"
         f"margin:10px 0 4px 0;'>{label}</div>",
         unsafe_allow_html=True
     )
 
-    # ── Text widget — Streamlit manages its value via widget_key ─
+    # ── Text widget ────────────────────────────────────────────
+    # Pass the stored value as `value=` so widget starts with correct text.
+    # Widget writes user edits back to widget_key automatically.
+    init_val = _safe_str(st.session_state[val_key])
     if multiline:
-        st.text_area(label, key=widget_key, height=80,
-                     label_visibility="collapsed")
+        typed = st.text_area(label, value=init_val, key=widget_key,
+                             height=80, label_visibility="collapsed")
     else:
-        st.text_input(label, key=widget_key,
-                      label_visibility="collapsed")
+        typed = st.text_input(label, value=init_val, key=widget_key,
+                              label_visibility="collapsed")
 
-    # Current value is always read from the widget's own key
-    current_val = _safe_str(st.session_state.get(widget_key, ""))
+    # Keep val_key in sync with whatever the user types directly
+    st.session_state[val_key] = _safe_str(typed)
 
-    # ── Mic toggle button ──────────────────────────────────────
-    btn_label = "⏹ Close mic" if st.session_state.get(mic_open_key) else "🎤 Speak"
+    # ── Mic toggle ─────────────────────────────────────────────
+    btn_label = "⏹ Close mic" if st.session_state.get(mic_key) else "🎤 Speak"
     if st.button(btn_label, key=f"_micbtn_{key}"):
-        st.session_state[mic_open_key] = not st.session_state.get(mic_open_key, False)
+        st.session_state[mic_key] = not st.session_state.get(mic_key, False)
         st.rerun()
 
     # ── Audio recorder panel ───────────────────────────────────
-    if st.session_state.get(mic_open_key, False):
+    if st.session_state.get(mic_key, False):
         st.markdown(
             f"<div style='background:#0f1e35;border:1px solid {C_BORDER};"
             f"border-left:3px solid {C_GOLD};border-radius:8px;"
             f"padding:10px 14px;margin:4px 0 8px 0;font-size:0.82rem;'>"
-            f"<b style='color:{C_GOLD};'> How to use:</b>"
-            f"<span style='color:{C_TEXT};'> Press ● below → speak → "
-            f"press Stop ■ → click ✅ Replace or ➕ Append.</span>"
+            f"<b style='color:{C_GOLD};'>How to use:</b>"
+            f"<span style='color:{C_TEXT};'> Press ● → speak → Stop ■ "
+            f"→ click ✅ Replace or ➕ Append.</span>"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -589,7 +597,6 @@ def voice_field(label: str, key: str, default: str = "",
             if error:
                 st.error(f"⚠️ {error}")
             else:
-                # Transcript preview box
                 st.markdown(
                     f"<div style='background:#0a2010;border:1px solid #10B981;"
                     f"border-radius:8px;padding:10px 14px;margin:6px 0;'>"
@@ -603,29 +610,31 @@ def voice_field(label: str, key: str, default: str = "",
 
                 safe_id = abs(hash(transcript)) % 100000
 
-                # ✅ REPLACE — write directly to widget_key so input shows new value
                 if st.button("✅ Replace field with transcript",
                              key=f"_rep_{key}_{safe_id}"):
-                    st.session_state[widget_key]   = _safe_str(transcript)
-                    st.session_state[mic_open_key] = False
+                    # Must NOT write to widget_key while widget exists.
+                    # Delete widget_key → write new value to val_key → rerun.
+                    # On rerun the widget re-creates itself using value=val_key.
+                    st.session_state.pop(widget_key, None)
+                    st.session_state[val_key] = _safe_str(transcript)
+                    st.session_state[mic_key] = False
                     st.rerun()
 
-                # ➕ APPEND — read from widget_key, write back to widget_key
                 if st.button("➕ Append transcript to field",
                              key=f"_app_{key}_{safe_id}"):
-                    existing = _safe_str(st.session_state.get(widget_key, ""))
-                    sep      = " " if existing and not existing.endswith(" ") else ""
-                    st.session_state[widget_key]   = existing + sep + _safe_str(transcript)
-                    st.session_state[mic_open_key] = False
+                    existing = _safe_str(st.session_state.get(val_key, ""))
+                    sep = " " if existing and not existing.endswith(" ") else ""
+                    st.session_state.pop(widget_key, None)
+                    st.session_state[val_key] = existing + sep + _safe_str(transcript)
+                    st.session_state[mic_key] = False
                     st.rerun()
 
                 if st.button("❌ Discard transcript",
                              key=f"_dis_{key}_{safe_id}"):
-                    st.session_state[mic_open_key] = False
+                    st.session_state[mic_key] = False
                     st.rerun()
 
-    # Return current widget value so render_form can collect it
-    return _safe_str(st.session_state.get(widget_key, ""))
+    return _safe_str(st.session_state.get(val_key, ""))
 
 def render_form(category: str, existing: dict = None,
                 form_id: str = "new") -> dict:
