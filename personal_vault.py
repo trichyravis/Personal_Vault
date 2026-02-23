@@ -526,58 +526,54 @@ def voice_field(label: str, key: str, default: str = "",
     Text input (or textarea) + 🎤 Speak button.
     Records via st.audio_input → transcribes via Google Speech API.
     User chooses to Replace or Append transcript into the field.
+
+    KEY DESIGN: Streamlit widgets own their value via their widget_key in
+    session_state. When we update the value from voice, we MUST write to
+    the widget_key (e.g. _ti_xxx), NOT just the outer key. Otherwise the
+    widget renders stale on rerun because it reads its own key, not ours.
     """
     C_GOLD   = "#FFD700";  C_BORDER = "#1e3a5f"
     C_TEXT   = "#e2e8f0";  C_MUTED  = "#64748b"
 
-    # Always sanitize before touching session_state
+    widget_key = f"_ta_{key}" if multiline else f"_ti_{key}"
+    mic_open_key = f"_mic_{key}"
+
+    # Seed widget_key with safe string default (first render only)
     safe_default = _safe_str(default)
+    if widget_key not in st.session_state or not isinstance(st.session_state[widget_key], str):
+        st.session_state[widget_key] = safe_default
 
-    # Seed session_state with a clean string (only if not already set)
-    if key not in st.session_state or not isinstance(st.session_state[key], str):
-        st.session_state[key] = safe_default
-
-    current_val = st.session_state[key]
-
-    # ── Label ────────────────────────────────────────────────
+    # ── Label ─────────────────────────────────────────────────
     st.markdown(
         f"<div style='color:{C_TEXT};font-size:0.88rem;font-weight:600;"
         f"margin:10px 0 4px 0;'>{label}</div>",
         unsafe_allow_html=True
     )
 
-    # ── Text field (always visible, always editable) ─────────
-    widget_key = f"_ta_{key}" if multiline else f"_ti_{key}"
+    # ── Text widget — Streamlit manages its value via widget_key ─
     if multiline:
-        typed = st.text_area(label, value=current_val,
-                             key=widget_key, height=80,
-                             label_visibility="collapsed")
+        st.text_area(label, key=widget_key, height=80,
+                     label_visibility="collapsed")
     else:
-        typed = st.text_input(label, value=current_val,
-                              key=widget_key,
-                              label_visibility="collapsed")
+        st.text_input(label, key=widget_key,
+                      label_visibility="collapsed")
 
-    # Sanitize widget return before storing
-    typed = _safe_str(typed)
-    st.session_state[key] = typed
+    # Current value is always read from the widget's own key
+    current_val = _safe_str(st.session_state.get(widget_key, ""))
 
-    # ── Mic toggle button ────────────────────────────────────
-    mic_open_key = f"_mic_{key}"
-
-    # Render mic button and hint side by side WITHOUT st.columns
-    # (columns were causing DeltaGenerator to bleed into session state)
+    # ── Mic toggle button ──────────────────────────────────────
     btn_label = "⏹ Close mic" if st.session_state.get(mic_open_key) else "🎤 Speak"
     if st.button(btn_label, key=f"_micbtn_{key}"):
         st.session_state[mic_open_key] = not st.session_state.get(mic_open_key, False)
         st.rerun()
 
-    # ── Audio recorder panel ─────────────────────────────────
+    # ── Audio recorder panel ───────────────────────────────────
     if st.session_state.get(mic_open_key, False):
         st.markdown(
             f"<div style='background:#0f1e35;border:1px solid {C_BORDER};"
             f"border-left:3px solid {C_GOLD};border-radius:8px;"
             f"padding:10px 14px;margin:4px 0 8px 0;font-size:0.82rem;'>"
-            f"<b style='color:{C_GOLD};'>How to use:</b>"
+            f"<b style='color:{C_GOLD};'> How to use:</b>"
             f"<span style='color:{C_TEXT};'> Press ● below → speak → "
             f"press Stop ■ → click ✅ Replace or ➕ Append.</span>"
             f"</div>",
@@ -593,7 +589,7 @@ def voice_field(label: str, key: str, default: str = "",
             if error:
                 st.error(f"⚠️ {error}")
             else:
-                # Transcript preview
+                # Transcript preview box
                 st.markdown(
                     f"<div style='background:#0a2010;border:1px solid #10B981;"
                     f"border-radius:8px;padding:10px 14px;margin:6px 0;'>"
@@ -605,19 +601,21 @@ def voice_field(label: str, key: str, default: str = "",
                     unsafe_allow_html=True
                 )
 
-                # Action buttons — stacked vertically, no columns
                 safe_id = abs(hash(transcript)) % 100000
+
+                # ✅ REPLACE — write directly to widget_key so input shows new value
                 if st.button("✅ Replace field with transcript",
                              key=f"_rep_{key}_{safe_id}"):
-                    st.session_state[key]          = _safe_str(transcript)
+                    st.session_state[widget_key]   = _safe_str(transcript)
                     st.session_state[mic_open_key] = False
                     st.rerun()
 
+                # ➕ APPEND — read from widget_key, write back to widget_key
                 if st.button("➕ Append transcript to field",
                              key=f"_app_{key}_{safe_id}"):
-                    existing = _safe_str(st.session_state.get(key, ""))
+                    existing = _safe_str(st.session_state.get(widget_key, ""))
                     sep      = " " if existing and not existing.endswith(" ") else ""
-                    st.session_state[key]          = existing + sep + _safe_str(transcript)
+                    st.session_state[widget_key]   = existing + sep + _safe_str(transcript)
                     st.session_state[mic_open_key] = False
                     st.rerun()
 
@@ -626,7 +624,8 @@ def voice_field(label: str, key: str, default: str = "",
                     st.session_state[mic_open_key] = False
                     st.rerun()
 
-    return _safe_str(st.session_state.get(key, typed))
+    # Return current widget value so render_form can collect it
+    return _safe_str(st.session_state.get(widget_key, ""))
 
 def render_form(category: str, existing: dict = None,
                 form_id: str = "new") -> dict:
